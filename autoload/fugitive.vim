@@ -164,6 +164,7 @@ function! s:TempScript(...) abort
   let body = join(a:000, "\n")
   if !has_key(s:temp_scripts, body)
     let s:temp_scripts[body] = tempname() . '.sh'
+    call s:addTempfile(s:temp_scripts[body])
   endif
   let temp = s:temp_scripts[body]
   if !filereadable(temp)
@@ -1488,6 +1489,7 @@ function! s:BlobTemp(url) abort
     let s:blobdirs[dir] = tempname()
   endif
   let tempfile = s:blobdirs[dir] . '/' . commit . file
+  call s:addTempfile(tempfile)
   let tempparent = fnamemodify(tempfile, ':h')
   if !isdirectory(tempparent)
     call mkdir(tempparent, 'p')
@@ -1520,7 +1522,7 @@ function! fugitive#writefile(lines, url, ...) abort
   let [dir, commit, file] = s:DirCommitFile(url)
   let entry = s:PathInfo(url)
   if commit =~# '^\d$' && entry[2] !=# 'tree'
-    let temp = tempname()
+    let temp = s:tempname()
     if a:0 && a:1 =~# 'a' && entry[2] ==# 'blob'
       call writefile(fugitive#readfile(url, 'b'), temp, 'b')
     endif
@@ -2892,7 +2894,7 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
         \ 'cwd': s:UserCommandCwd(dir),
         \ 'filetype': 'git',
         \ 'mods': s:Mods(a:mods),
-        \ 'file': s:Resolve(tempname())}
+        \ 'file': s:Resolve(s:tempname())}
   if pager is# 1
     call extend(env, {'COLUMNS': '' . get(g:, 'fugitive_columns', 80)}, 'keep')
   else
@@ -3942,7 +3944,7 @@ function! s:StageApply(info, reverse, extra) abort
     let i += 1
   endwhile
   call extend(lines, head, 'keep')
-  let temp = tempname()
+  let temp = s:tempname()
   call writefile(lines, temp)
   if a:reverse
     call add(cmd, '--reverse')
@@ -4640,7 +4642,7 @@ function! s:GrepSubcommand(line1, line2, range, bang, mods, options) abort
   endif
   redraw
   call s:QuickfixCreate(listnr, {'title': (listnr < 0 ? ':Git grep ' : ':0Git grep ') . s:fnameescape(args)})
-  let tempfile = tempname()
+  let tempfile = s:tempname()
   let event = listnr < 0 ? 'grep-fugitive' : 'lgrep-fugitive'
   silent exe s:DoAutocmd('QuickFixCmdPre ' . event)
   let prefix = FugitiveVimPath(s:HasOpt(args, '--cached') || empty(tree) ?
@@ -5104,7 +5106,7 @@ function! fugitive#WriteCommand(line1, line2, range, bang, mods, arg, args) abor
   endfor
 
   if treebufnr > 0 && treebufnr != bufnr('')
-    let temp = tempname()
+    let temp = s:tempname()
     silent execute 'keepalt %write '.temp
     for tab in [mytab] + range(1,tabpagenr('$'))
       for winnr in range(1,tabpagewinnr(tab,'$'))
@@ -5720,6 +5722,7 @@ function! s:BlameSubcommand(line1, count, range, bang, mods, options) abort
     call extend(cmd, ranges)
     let tempname = tempname()
     let temp = tempname . (raw ? '' : '.fugitiveblame')
+    call s:addTempfile(temp)
     if len(commits)
       let cmd += commits
     elseif empty(files) && len(matchstr(s:DirCommitFile(@%)[1], '^\x\x\+$'))
@@ -6082,10 +6085,32 @@ function! fugitive#BlameFileType() abort
   call s:Map('n', '.',    ":<C-U> <C-R>=substitute(<SID>BlameCommitFileLnum()[0],'^$','@','')<CR><Home>")
 endfunction
 
+function! s:tempname() abort
+  let file = tempname()
+  call s:addTempfile(file)
+  return file
+endfunction
+
+let s:tempfiles=[]
+function! s:addTempfile(file) abort
+  let file = a:file
+  let index = index(s:tempfiles, file)
+  if index == -1
+    call add(s:tempfiles, file)
+  endif
+endfunction
+
+function! s:removeTempfiles() abort
+  for file in s:tempfiles
+    call delete(file)
+  endfor
+endfunction
+
 augroup fugitive_blame
   autocmd!
   autocmd ColorScheme,GUIEnter * call s:BlameRehighlight()
   autocmd BufWinLeave * execute getwinvar(+bufwinnr(+expand('<abuf>')), 'fugitive_leave')
+  autocmd VimLeave * call s:removeTempfiles()
 augroup END
 
 " Section: :GBrowse
@@ -6268,9 +6293,9 @@ function! fugitive#BrowseCommand(line1, count, range, bang, mods, arg, args) abo
             let commit = ''
           endif
           if line2 > 0 && empty(arg) && commit =~# '^\x\{40,\}$'
-            let blame_list = tempname()
+            let blame_list = s:tempname()
             call writefile([commit, ''], blame_list, 'b')
-            let blame_in = tempname()
+            let blame_in = s:tempname()
             silent exe '%write' blame_in
             let [blame, exec_error] = s:LinesError(['-c', 'blame.coloring=none', 'blame', '--contents', blame_in, '-L', line1.','.line2, '-S', blame_list, '-s', '--show-number', './' . path], dir)
             if !exec_error
